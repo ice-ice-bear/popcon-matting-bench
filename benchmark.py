@@ -167,9 +167,12 @@ def run_vitmatte(frame_path: Path, dilation: int = 10) -> Image.Image:
     alpha = output.alphas[0, 0].cpu().numpy()
     alpha = (np.clip(alpha, 0, 1) * 255).astype(np.uint8)
 
+    # Resize alpha to match original image (ViTMatte may pad/resize internally)
+    alpha_pil = Image.fromarray(alpha, mode="L").resize(image.size, Image.BILINEAR)
+
     # Combine original RGB with predicted alpha
     rgba = image.convert("RGBA")
-    rgba.putalpha(Image.fromarray(alpha, mode="L"))
+    rgba.putalpha(alpha_pil)
     return rgba
 
 
@@ -241,7 +244,7 @@ def run_rvm(frame_paths: list[Path]) -> list[Image.Image] | None:
         subprocess.run(cmd, capture_output=True, check=True)
 
         # Load RVM model
-        model = torch.hub.load("PeterL1n/RobustVideoMatting", "resnet50")
+        model = torch.hub.load("PeterL1n/RobustVideoMatting", "resnet50", trust_repo=True)
         model = model.eval()
         if torch.cuda.is_available():
             model = model.cuda()

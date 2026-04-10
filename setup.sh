@@ -8,15 +8,17 @@ MODELS_DIR="$(dirname "$0")/models"
 mkdir -p "$MODELS_DIR"
 
 # MODNet ONNX model (~24MB)
-MODNET_URL="https://github.com/ZHKKKe/MODNet/raw/master/pretrained/modnet_photographic_portrait_matting.onnx"
+# The pretrained ONNX model must be exported manually from the checkpoint.
+# 1. Download checkpoint from: https://drive.google.com/drive/folders/1umYmlCulvIFNaqPjwod1SayFmSRHziyR
+# 2. Clone https://github.com/ZHKKKe/MODNet
+# 3. Run: python -m onnx.export_onnx --ckpt-path=pretrained/modnet_photographic_portrait_matting.ckpt --output-path=pretrained/modnet_photographic_portrait_matting.onnx
+# 4. Copy the .onnx file to: models/modnet_photographic_portrait_matting.onnx
 MODNET_PATH="$MODELS_DIR/modnet_photographic_portrait_matting.onnx"
-
 if [ -f "$MODNET_PATH" ]; then
-    echo "MODNet model already downloaded: $MODNET_PATH"
+    echo "MODNet model found: $MODNET_PATH"
 else
-    echo "Downloading MODNet ONNX model..."
-    curl -fSL "$MODNET_URL" -o "$MODNET_PATH"
-    echo "Downloaded: $MODNET_PATH ($(du -h "$MODNET_PATH" | cut -f1))"
+    echo "MODNet model NOT found. See setup.sh comments for manual download instructions."
+    echo "Benchmark will skip MODNet and run other models."
 fi
 
 # RVM model (downloaded via torch.hub on first run of benchmark.py)
