@@ -1,0 +1,21 @@
+# Background removal baseline
+rembg>=2.0.50
+
+# MODNet inference
+onnxruntime>=1.17.0
+
+# ViTMatte
+transformers>=4.36.0
+
+# RVM (RobustVideoMatting)
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Image processing
+Pillow>=10.0.0
+numpy>=1.24.0
+opencv-python>=4.8.0
+scipy>=1.11.0
+
+# Testing
+pytest>=7.0.0
