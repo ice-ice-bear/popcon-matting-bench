@@ -176,6 +176,96 @@ def run_vitmatte(frame_path: Path, dilation: int = 10) -> Image.Image:
     return rgba
 
 
+_birefnet_model = None
+
+
+def run_birefnet(frame_path: Path) -> Image.Image:
+    """Run BiRefNet (ToonOut-class anime/cartoon segmentation). Returns RGBA.
+
+    HF: ZhengPeng7/BiRefNet — general dichotomous image segmentation that
+    works well on stylized content. 221M params, ~900 MB weights.
+    """
+    global _birefnet_model
+    import torch
+    from transformers import AutoModelForImageSegmentation
+    from torchvision import transforms
+
+    if _birefnet_model is None:
+        print("    loading BiRefNet (first call) …")
+        m = AutoModelForImageSegmentation.from_pretrained(
+            "ZhengPeng7/BiRefNet", trust_remote_code=True,
+            torch_dtype=torch.float32,
+        )
+        device = "mps" if torch.backends.mps.is_available() else "cpu"
+        m.to(device).float().eval()
+        _birefnet_model = (m, device)
+
+    model, device = _birefnet_model
+    image = Image.open(frame_path).convert("RGB")
+    orig_size = image.size
+
+    tfm = transforms.Compose([
+        transforms.Resize((1024, 1024)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+    ])
+    x = tfm(image).unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        preds = model(x)[-1].sigmoid().cpu()
+    alpha = preds[0].squeeze()
+    alpha_pil = transforms.ToPILImage()(alpha).resize(orig_size, Image.BILINEAR)
+
+    rgba = image.convert("RGBA")
+    rgba.putalpha(alpha_pil)
+    return rgba
+
+
+_sam2_model = None
+
+
+def run_sam2(frame_path: Path) -> Image.Image | None:
+    """Run SAM2.1 Tiny with an auto-generated center click on the character.
+
+    The click point is the centroid of a coarse non-white mask (same heuristic
+    as the trimap generator). Simulates the "user clicks on the character"
+    interaction used in the live refine UI — so the resulting halo score
+    answers: does SAM2 itself introduce the white fringe?
+
+    Returns None if ultralytics is missing.
+    """
+    global _sam2_model
+    try:
+        from ultralytics import SAM
+    except ImportError:
+        print("  ultralytics not installed — `pip install ultralytics`")
+        return None
+
+    if _sam2_model is None:
+        print("    loading SAM2 tiny (first call) …")
+        _sam2_model = SAM("sam2.1_t.pt")
+
+    # Pick click point = centroid of dark (non-white) pixels
+    img_cv = cv2.imread(str(frame_path))
+    gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+    ys, xs = np.where(gray < 240)
+    if len(xs) == 0:
+        return None
+    cx, cy = int(xs.mean()), int(ys.mean())
+
+    results = _sam2_model(str(frame_path), points=[[[cx, cy]]], labels=[[1]], verbose=False)
+    mask = results[0].masks.data[0]
+    if hasattr(mask, "cpu"):
+        mask = mask.cpu().numpy()
+    mask_u8 = (mask > 0.5).astype(np.uint8) * 255
+
+    image = Image.open(frame_path).convert("RGB")
+    alpha = Image.fromarray(mask_u8, mode="L").resize(image.size, Image.NEAREST)
+    rgba = image.convert("RGBA")
+    rgba.putalpha(alpha)
+    return rgba
+
+
 def run_modnet(frame_path: Path) -> Image.Image | None:
     """Run MODNet ONNX inference. Returns RGBA image or None if model missing."""
     import onnxruntime as ort
@@ -303,7 +393,11 @@ def benchmark_emoji(
     diagnostic_dir.mkdir(parents=True, exist_ok=True)
     composites_dir.mkdir(parents=True, exist_ok=True)
 
-    all_models = run_models or ["rembg", "rembg_enhanced", "modnet", "vitmatte_5", "vitmatte_10", "vitmatte_20", "rvm"]
+    all_models = run_models or [
+        "rembg", "rembg_enhanced",
+        "birefnet", "sam2",
+        "modnet", "vitmatte_5", "vitmatte_10", "vitmatte_20", "rvm",
+    ]
 
     # Step 0: Diagnostic — visualize raw rembg output
     print(f"  Step 0: Diagnostic (raw rembg alpha visualization)...")
@@ -322,6 +416,17 @@ def benchmark_emoji(
             model_results = rembg_results
         elif model_name == "rembg_enhanced":
             model_results = {fp.stem: run_rembg_enhanced(fp) for fp in raw_frames}
+        elif model_name == "birefnet":
+            model_results = {fp.stem: run_birefnet(fp) for fp in raw_frames}
+        elif model_name == "sam2":
+            model_results = {}
+            for fp in raw_frames:
+                result = run_sam2(fp)
+                if result is None:
+                    break
+                model_results[fp.stem] = result
+            if not model_results:
+                continue
         elif model_name == "modnet":
             model_results = {}
             for fp in raw_frames:
